@@ -1,0 +1,181 @@
+name: PR Auto Labeler
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  label-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Auto label PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const pr = context.payload.pull_request;
+          const title = pr.title.toLowerCase();
+          const body = (pr.body || '').toLowerCase();
+          
+          let labels = [];
+          
+          try {
+            // PR에서 변경된 파일 목록 가져오기
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number
+            });
+            
+            const changedFiles = files.data;
+            const filePaths = changedFiles.map(file => file.filename);
+            const additions = changedFiles.reduce((sum, file) => sum + file.additions, 0);
+            const deletions = changedFiles.reduce((sum, file) => sum + file.deletions, 0);
+            
+            // 1. 제목 기반 라벨링
+            if (title.includes('[feat]') || title.includes('feature') || title.includes('add')) {
+              labels.push('feature');
+            }
+            if (title.includes('[fix]') || title.includes('bug') || title.includes('fix')) {
+              labels.push('bugfix');
+            }
+            if (title.includes('[docs]') || title.includes('documentation') || title.includes('readme')) {
+              labels.push('documentation');
+            }
+            if (title.includes('[refactor]') || title.includes('refactor') || title.includes('cleanup')) {
+              labels.push('refactoring');
+            }
+            if (title.includes('[test]') || title.includes('test')) {
+              labels.push('testing');
+            }
+            if (title.includes('enhancement') || title.includes('improve')) {
+              labels.push('enhancement');
+            }
+            if (title.includes('urgent') || title.includes('hotfix') || title.includes('critical')) {
+              labels.push('urgent');
+            }
+            
+            // 2. 파일 경로 기반 라벨링
+            const backendFiles = filePaths.filter(path => path.startsWith('backend/'));
+            const frontendFiles = filePaths.filter(path => path.startsWith('frontend/'));
+            const testFiles = filePaths.filter(path => path.includes('test') || path.includes('spec'));
+            const docFiles = filePaths.filter(path => path.endsWith('.md') || path.startsWith('docs/'));
+            const configFiles = filePaths.filter(path => 
+              path.includes('config') || 
+              path.includes('.yml') || 
+              path.includes('.yaml') || 
+              path.includes('.json') || 
+              path.includes('requirements.txt') ||
+              path.includes('.github/')
+            );
+            
+            if (backendFiles.length > 0) labels.push('backend');
+            if (frontendFiles.length > 0) labels.push('frontend');
+            if (testFiles.length > 0) labels.push('testing');
+            if (docFiles.length > 0) labels.push('documentation');
+            if (configFiles.length > 0) labels.push('configuration');
+            
+            // 3. 변경 규모 기반 라벨링
+            const totalChanges = additions + deletions;
+            if (totalChanges > 500) {
+              labels.push('major-change');
+            } else if (totalChanges > 100) {
+              labels.push('medium-change');
+            } else {
+              labels.push('minor-change');
+            }
+            
+            // 4. 특별한 파일 변경 감지
+            const hasPackageChanges = filePaths.some(path => 
+              path.includes('requirements.txt') || 
+              path.includes('package.json') || 
+              path.includes('Pipfile')
+            );
+            if (hasPackageChanges) labels.push('dependencies');
+            
+            const hasDbChanges = filePaths.some(path => 
+              path.includes('migration') || 
+              path.includes('schema') || 
+              path.includes('.sql')
+            );
+            if (hasDbChanges) labels.push('database');
+            
+            const hasSecurityChanges = filePaths.some(path => 
+              path.includes('auth') || 
+              path.includes('security') || 
+              path.includes('permission')
+            );
+            if (hasSecurityChanges) labels.push('security');
+            
+            // 5. PR 본문 기반 라벨링
+            if (body.includes('breaking change') || body.includes('breaking-change')) {
+              labels.push('breaking-change');
+            }
+            if (body.includes('wip') || body.includes('work in progress') || pr.draft) {
+              labels.push('work-in-progress');
+            }
+            if (body.includes('needs review') || body.includes('ready for review')) {
+              labels.push('ready-for-review');
+            }
+            
+            // 중복 제거
+            labels = [...new Set(labels)];
+            
+            // 라벨 적용
+            if (labels.length > 0) {
+              await github.rest.issues.setLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: labels
+              });
+              
+              console.log(`Applied labels: ${labels.join(', ')}`);
+              
+              // 라벨링 결과 댓글 작성
+              const labelComment = `## 🏷️ 자동 라벨링 완료
+
+              **적용된 라벨:**
+              ${labels.map(label => `- \`${label}\``).join('\n')}
+
+              **라벨링 기준:**
+              - PR 제목 및 내용 분석
+              - 변경된 파일 경로 분석
+              - 코드 변경 규모 분석
+              - 특별한 파일 변경사항 감지
+
+              **📊 변경 통계:**
+              - 변경된 파일: ${filePaths.length}개
+              - 추가된 줄: +${additions}
+              - 삭제된 줄: -${deletions}
+
+              ---
+              *이 라벨링은 GitHub Actions에 의해 자동으로 수행되었습니다.*`;
+              
+              await github.rest.issues.createComment({
+                issue_number: pr.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: labelComment
+              });
+            }
+            
+          } catch (error) {
+            console.error('Error in auto-labeling:', error);
+            
+            // 오류 발생 시 기본 라벨 적용
+            const fallbackLabels = ['needs-review'];
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: fallbackLabels
+            });
+          } 

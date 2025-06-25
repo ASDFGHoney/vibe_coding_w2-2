@@ -1,0 +1,233 @@
+name: Issue Auto Labeler
+
+on:
+  issues:
+    types: [opened, reopened, edited]
+
+jobs:
+  label-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    
+    steps:
+    - name: Auto label issue
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+          const author = issue.user.login;
+          
+          let labels = [];
+          
+          try {
+            // 1. 제목 기반 라벨링
+            if (title.includes('[bug]') || title.includes('bug') || title.includes('error') || title.includes('broken')) {
+              labels.push('bug');
+            }
+            if (title.includes('[feature]') || title.includes('feature') || title.includes('add') || title.includes('new')) {
+              labels.push('feature');
+            }
+            if (title.includes('[question]') || title.includes('question') || title.includes('how to') || title.includes('help')) {
+              labels.push('question');
+            }
+            if (title.includes('[enhancement]') || title.includes('enhancement') || title.includes('improve') || title.includes('better')) {
+              labels.push('enhancement');
+            }
+            if (title.includes('[docs]') || title.includes('documentation') || title.includes('readme')) {
+              labels.push('documentation');
+            }
+            if (title.includes('urgent') || title.includes('critical') || title.includes('asap')) {
+              labels.push('urgent');
+            }
+            
+            // 2. 내용 기반 라벨링
+            const allText = title + ' ' + body;
+            
+            // 기술 스택 관련
+            if (allText.includes('backend') || allText.includes('api') || allText.includes('server') || allText.includes('fastapi')) {
+              labels.push('backend');
+            }
+            if (allText.includes('frontend') || allText.includes('ui') || allText.includes('client') || allText.includes('streamlit')) {
+              labels.push('frontend');
+            }
+            if (allText.includes('database') || allText.includes('sql') || allText.includes('db')) {
+              labels.push('database');
+            }
+            if (allText.includes('test') || allText.includes('testing') || allText.includes('pytest')) {
+              labels.push('testing');
+            }
+            if (allText.includes('deploy') || allText.includes('deployment') || allText.includes('docker') || allText.includes('ci/cd')) {
+              labels.push('deployment');
+            }
+            if (allText.includes('security') || allText.includes('auth') || allText.includes('permission') || allText.includes('vulnerability')) {
+              labels.push('security');
+            }
+            if (allText.includes('performance') || allText.includes('slow') || allText.includes('optimization')) {
+              labels.push('performance');
+            }
+            
+            // 3. 우선순위 판단
+            const highPriorityKeywords = ['critical', 'urgent', 'blocking', 'production', 'down', 'broken'];
+            const mediumPriorityKeywords = ['important', 'needed', 'asap'];
+            const lowPriorityKeywords = ['nice to have', 'future', 'maybe', 'consider'];
+            
+            if (highPriorityKeywords.some(keyword => allText.includes(keyword))) {
+              labels.push('priority: high');
+            } else if (mediumPriorityKeywords.some(keyword => allText.includes(keyword))) {
+              labels.push('priority: medium');
+            } else if (lowPriorityKeywords.some(keyword => allText.includes(keyword))) {
+              labels.push('priority: low');
+            } else {
+              // 기본 우선순위는 버그면 high, 기능이면 medium
+              if (labels.includes('bug')) {
+                labels.push('priority: high');
+              } else if (labels.includes('feature')) {
+                labels.push('priority: medium');
+              }
+            }
+            
+            // 4. 난이도 판단
+            if (allText.includes('beginner') || allText.includes('easy') || allText.includes('simple')) {
+              labels.push('good-first-issue');
+            }
+            if (allText.includes('help') || allText.includes('assistance') || allText.includes('contribute')) {
+              labels.push('help-wanted');
+            }
+            
+            // 5. 상태 관련
+            if (allText.includes('duplicate') || allText.includes('same as')) {
+              labels.push('duplicate');
+            }
+            if (allText.includes('invalid') || allText.includes('not reproducible')) {
+              labels.push('invalid');
+            }
+            
+            // 6. 특별한 케이스들
+            if (allText.includes('breaking change') || allText.includes('breaking-change')) {
+              labels.push('breaking-change');
+            }
+            if (allText.includes('accessibility') || allText.includes('a11y')) {
+              labels.push('accessibility');
+            }
+            if (allText.includes('mobile') || allText.includes('responsive')) {
+              labels.push('mobile');
+            }
+            
+            // 7. 작성자 기반 라벨링
+            // 새로운 기여자인지 확인 (실제로는 GitHub API로 확인해야 함)
+            const isNewContributor = false; // 이 부분은 실제 구현에서 API로 확인
+            if (isNewContributor) {
+              labels.push('new-contributor');
+            }
+            
+            // 8. 이슈 길이 기반 판단
+            if (body.length < 50) {
+              labels.push('needs-more-info');
+            }
+            
+            // 9. 템플릿 사용 여부 확인
+            const hasTemplate = body.includes('## 설명') || body.includes('## Description') || 
+                               body.includes('## 재현 방법') || body.includes('## Steps to reproduce');
+            if (!hasTemplate && labels.includes('bug')) {
+              labels.push('needs-template');
+            }
+            
+            // 중복 제거
+            labels = [...new Set(labels)];
+            
+            // 최소 하나의 라벨은 있어야 함
+            if (labels.length === 0) {
+              labels.push('triage');
+            }
+            
+            // 라벨 적용
+            if (labels.length > 0) {
+              await github.rest.issues.setLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: labels
+              });
+              
+              console.log(`Applied labels: ${labels.join(', ')}`);
+              
+              // 라벨링 분석 결과 댓글 작성
+              const priorityLabels = labels.filter(label => label.startsWith('priority:'));
+              const typeLabels = labels.filter(label => ['bug', 'feature', 'question', 'enhancement', 'documentation'].includes(label));
+              const techLabels = labels.filter(label => ['backend', 'frontend', 'database', 'testing', 'deployment', 'security', 'performance'].includes(label));
+              const statusLabels = labels.filter(label => ['urgent', 'help-wanted', 'good-first-issue', 'needs-more-info', 'needs-template'].includes(label));
+              
+              const labelingComment = `## 🏷️ 자동 라벨링 완료
+
+              **📊 적용된 라벨 (총 ${labels.length}개):**
+              ${labels.map(label => `- \`${label}\``).join('\n')}
+
+              **📋 라벨 분류:**
+              ${typeLabels.length > 0 ? `- **타입**: ${typeLabels.join(', ')}` : ''}
+              ${priorityLabels.length > 0 ? `- **우선순위**: ${priorityLabels.join(', ')}` : ''}
+              ${techLabels.length > 0 ? `- **기술 스택**: ${techLabels.join(', ')}` : ''}
+              ${statusLabels.length > 0 ? `- **상태**: ${statusLabels.join(', ')}` : ''}
+
+              **🔍 라벨링 기준:**
+              - 이슈 제목 키워드 분석
+              - 이슈 내용 기술 스택 감지
+              - 우선순위 키워드 매칭
+              - 템플릿 사용 여부 확인
+              - 이슈 품질 평가
+
+              **📝 다음 단계:**
+              ${labels.includes('needs-more-info') ? '- ⚠️ 추가 정보가 필요합니다. 더 자세한 설명을 부탁드립니다.\n' : ''}
+              ${labels.includes('needs-template') ? '- ⚠️ 이슈 템플릿 사용을 권장합니다.\n' : ''}
+              ${labels.includes('triage') ? '- 🔍 팀에서 이슈를 검토하고 적절한 라벨을 추가할 예정입니다.\n' : ''}
+              ${labels.includes('urgent') ? '- 🚨 긴급 이슈로 분류되어 우선 처리될 예정입니다.\n' : ''}
+              ${labels.includes('good-first-issue') ? '- 🌟 첫 기여에 적합한 이슈입니다. 많은 참여 부탁드립니다!\n' : ''}
+
+              **⏰ 예상 처리 시간:**
+              ${priorityLabels.includes('priority: high') ? '- 1-2일 내 초기 대응' : 
+                priorityLabels.includes('priority: medium') ? '- 3-5일 내 초기 대응' : 
+                priorityLabels.includes('priority: low') ? '- 1-2주 내 초기 대응' : 
+                '- 팀 검토 후 일정 안내'}
+
+              ---
+              *이 라벨링은 GitHub Actions에 의해 자동으로 수행되었습니다. 부정확한 라벨이 있다면 수동으로 수정해주세요.*`;
+              
+              await github.rest.issues.createComment({
+                issue_number: issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: labelingComment
+              });
+            }
+            
+          } catch (error) {
+            console.error('Error in auto-labeling:', error);
+            
+            // 오류 발생 시 기본 라벨 적용
+            const fallbackLabels = ['triage'];
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: fallbackLabels
+            });
+            
+            await github.rest.issues.createComment({
+              issue_number: issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ⚠️ 자동 라벨링 오류
+
+              자동 라벨링 중 오류가 발생하여 \`triage\` 라벨이 임시로 적용되었습니다.
+
+              **오류 정보:** ${error.message}
+
+              팀에서 수동으로 적절한 라벨을 적용할 예정입니다.
+
+              ---
+              *오류 발생으로 인한 임시 라벨링입니다.*`
+            });
+          } 

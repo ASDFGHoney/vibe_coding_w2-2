@@ -1,0 +1,242 @@
+name: Issue Comment
+
+on:
+  issues:
+    types: [opened, reopened, labeled]
+
+jobs:
+  issue-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    
+    steps:
+    - name: Welcome comment for new issues
+      if: github.event.action == 'opened'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const author = issue.user.login;
+          const title = issue.title;
+          const body = issue.body || '';
+          
+          // 이슈 타입 분석
+          let issueType = 'general';
+          if (title.toLowerCase().includes('[bug]') || title.toLowerCase().includes('bug')) {
+            issueType = 'bug';
+          } else if (title.toLowerCase().includes('[feature]') || title.toLowerCase().includes('feature')) {
+            issueType = 'feature';
+          } else if (title.toLowerCase().includes('[question]') || title.toLowerCase().includes('question')) {
+            issueType = 'question';
+          } else if (title.toLowerCase().includes('[enhancement]') || title.toLowerCase().includes('enhancement')) {
+            issueType = 'enhancement';
+          }
+          
+          // 타입별 환영 메시지
+          let welcomeMessage;
+          switch (issueType) {
+            case 'bug':
+              welcomeMessage = `## 🐛 버그 신고 감사합니다!
+
+              안녕하세요 @${author}님! 버그 신고해주셔서 감사합니다.
+
+              **📋 버그 처리 프로세스:**
+              1. 🔍 이슈 내용 검토
+              2. 🏷️ 우선순위 라벨 할당
+              3. 👥 담당자 배정
+              4. 🧪 재현 및 분석
+              5. 🔧 수정 작업
+              6. ✅ 테스트 및 검증
+
+              **⏰ 예상 처리 시간:**
+              - 긴급 버그: 24시간 이내
+              - 일반 버그: 3-5일
+              - 마이너 버그: 1-2주
+
+              **📞 추가 정보가 필요한 경우 댓글로 문의드릴 수 있습니다.**`;
+              break;
+              
+            case 'feature':
+              welcomeMessage = `## ✨ 기능 요청 감사합니다!
+
+              안녕하세요 @${author}님! 새로운 기능을 제안해주셔서 감사합니다.
+
+              **📋 기능 요청 처리 프로세스:**
+              1. 📝 요구사항 분석
+              2. 🎯 우선순위 평가
+              3. 📊 기술적 검토
+              4. 🗳️ 팀 내 논의
+              5. 📅 개발 일정 수립
+              6. 🚀 구현 시작
+
+              **💡 검토 기준:**
+              - 사용자 가치
+              - 기술적 실현 가능성
+              - 리소스 요구사항
+              - 기존 기능과의 호환성
+
+              **📊 기능 요청은 정기적으로 검토되며, 결과를 알려드리겠습니다.**`;
+              break;
+              
+            case 'question':
+              welcomeMessage = `## ❓ 질문 감사합니다!
+
+              안녕하세요 @${author}님! 질문해주셔서 감사합니다.
+
+              **🔍 질문 답변 프로세스:**
+              1. 📖 문서 확인
+              2. 🧠 팀 내 검토
+              3. 💬 상세 답변 제공
+              4. 📚 문서 업데이트 (필요시)
+
+              **⚡ 빠른 답변을 위한 팁:**
+              - 구체적인 상황 설명
+              - 에러 메시지 첨부
+              - 환경 정보 제공
+              - 기대하는 결과 명시
+
+              **📞 추가 질문이 있으시면 언제든 댓글로 문의해주세요!**`;
+              break;
+              
+            default:
+              welcomeMessage = `## 👋 이슈 등록 감사합니다!
+
+              안녕하세요 @${author}님! 이슈를 등록해주셔서 감사합니다.
+
+              **📋 이슈 처리 프로세스:**
+              1. 🔍 내용 검토 및 분류
+              2. 🏷️ 적절한 라벨 할당
+              3. 👥 담당자 배정
+              4. 📅 일정 수립
+              5. 🚀 작업 진행
+              6. ✅ 완료 및 검증
+
+              **⏰ 일반적인 처리 시간:**
+              - 긴급 이슈: 24시간 이내
+              - 일반 이슈: 3-7일
+              - 개선 사항: 1-2주
+
+              **📞 추가 정보가 필요한 경우 댓글로 연락드리겠습니다.**`;
+          }
+          
+          // 체크리스트 확인
+          const hasDescription = body.length > 20;
+          const hasSteps = body.toLowerCase().includes('단계') || body.toLowerCase().includes('step');
+          const hasExpected = body.toLowerCase().includes('예상') || body.toLowerCase().includes('expected');
+          
+          const checklistComment = `
+          **📋 이슈 품질 체크:**
+          - [${hasDescription ? 'x' : ' '}] 충분한 설명 제공
+          - [${hasSteps ? 'x' : ' '}] 재현 단계 포함 (버그의 경우)
+          - [${hasExpected ? 'x' : ' '}] 예상 결과 명시
+          - [${title.length > 10 ? 'x' : ' '}] 명확한 제목
+
+          ${!hasDescription ? '💡 **개선 제안**: 더 자세한 설명을 추가해주시면 더 빠른 처리가 가능합니다.\n' : ''}
+          ${issueType === 'bug' && !hasSteps ? '💡 **개선 제안**: 버그 재현 단계를 추가해주시면 디버깅에 도움이 됩니다.\n' : ''}`;
+
+          const fullComment = welcomeMessage + '\n\n' + checklistComment + `
+
+          ---
+          *이 댓글은 GitHub Actions에 의해 자동으로 생성되었습니다. 곧 담당자가 검토할 예정입니다.*`;
+
+          await github.rest.issues.createComment({
+            issue_number: issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: fullComment
+          });
+
+  issue-status-update:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    if: github.event.action == 'labeled'
+    
+    steps:
+    - name: Status update comment
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const label = context.payload.label;
+          
+          let statusMessage = '';
+          
+          switch (label.name) {
+            case 'bug':
+              statusMessage = `🐛 **버그 라벨이 할당되었습니다.**
+              
+              이 이슈는 버그로 분류되어 높은 우선순위로 처리될 예정입니다.
+              담당 개발자가 곧 할당될 예정입니다.`;
+              break;
+              
+            case 'feature':
+              statusMessage = `✨ **기능 요청 라벨이 할당되었습니다.**
+              
+              이 기능 요청은 제품 팀에서 검토 후 우선순위를 결정할 예정입니다.
+              검토 결과는 1-2주 내에 알려드리겠습니다.`;
+              break;
+              
+            case 'urgent':
+              statusMessage = `🚨 **긴급 이슈로 분류되었습니다.**
+              
+              이 이슈는 최우선으로 처리될 예정입니다.
+              24시간 내에 초기 대응이 이루어질 예정입니다.`;
+              break;
+              
+            case 'help-wanted':
+              statusMessage = `🙋 **도움이 필요한 이슈입니다.**
+              
+              커뮤니티 기여를 환영합니다! 
+              이 이슈 해결에 참여하고 싶으시면 댓글로 의사를 표현해주세요.`;
+              break;
+              
+            case 'good-first-issue':
+              statusMessage = `🌟 **첫 기여에 좋은 이슈입니다.**
+              
+              이 이슈는 프로젝트에 처음 기여하는 분들에게 적합합니다.
+              궁금한 점이 있으시면 언제든 질문해주세요!`;
+              break;
+              
+            case 'wontfix':
+              statusMessage = `❌ **수정하지 않기로 결정되었습니다.**
+              
+              이 이슈는 다음 이유로 수정하지 않기로 결정되었습니다:
+              - 설계 의도와 일치하지 않음
+              - 대안 해결책 존재
+              - 기술적 제약 사항
+              
+              자세한 이유는 담당자가 별도로 설명드릴 예정입니다.`;
+              break;
+              
+            case 'duplicate':
+              statusMessage = `🔄 **중복 이슈로 확인되었습니다.**
+              
+              이 이슈는 기존 이슈와 중복되는 것으로 확인되었습니다.
+              관련된 기존 이슈 링크를 곧 제공해드리겠습니다.`;
+              break;
+              
+            default:
+              // 우선순위 라벨들
+              if (label.name.startsWith('priority:')) {
+                const priority = label.name.split(':')[1];
+                statusMessage = `📊 **우선순위가 ${priority}로 설정되었습니다.**
+                
+                이 우선순위에 따라 처리 일정이 결정됩니다:
+                - high: 1-3일 내 시작
+                - medium: 1-2주 내 시작  
+                - low: 백로그에서 관리`;
+              }
+          }
+          
+          if (statusMessage) {
+            await github.rest.issues.createComment({
+              issue_number: issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: statusMessage + `\n\n---\n*라벨 변경에 따른 자동 업데이트입니다.*`
+            });
+          } 

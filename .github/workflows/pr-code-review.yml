@@ -1,0 +1,192 @@
+name: PR Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort bandit pylint
+    
+    - name: Automated Code Review
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const pr = context.payload.pull_request;
+          
+          try {
+            // PR에서 변경된 파일 목록 가져오기
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number
+            });
+            
+            const pythonFiles = files.data.filter(file => 
+              file.filename.endsWith('.py') && file.status !== 'removed'
+            );
+            
+            if (pythonFiles.length === 0) {
+              console.log('No Python files to review');
+              return;
+            }
+            
+            let reviewComments = [];
+            let codeQualityScore = 100;
+            let securityIssues = [];
+            let styleIssues = [];
+            
+            // 각 Python 파일에 대한 분석
+            for (const file of pythonFiles) {
+              const filename = file.filename;
+              const additions = file.additions;
+              const deletions = file.deletions;
+              const changes = file.changes;
+              
+              // 파일 크기 체크
+              if (changes > 300) {
+                reviewComments.push(`⚠️ **${filename}**: 파일 변경량이 큽니다 (${changes}줄). 더 작은 단위로 분할을 고려해보세요.`);
+                codeQualityScore -= 5;
+              }
+              
+              // 파일명 컨벤션 체크
+              if (!filename.match(/^[a-z_][a-z0-9_]*\.py$/)) {
+                reviewComments.push(`🔤 **${filename}**: 파일명이 Python 네이밍 컨벤션을 따르지 않습니다.`);
+                codeQualityScore -= 3;
+              }
+              
+              // 테스트 파일 존재 여부 체크
+              if (!filename.includes('test_') && filename.startsWith('backend/app/')) {
+                const testFileName = filename.replace('backend/app/', 'backend/tests/test_');
+                const hasTest = files.data.some(f => f.filename === testFileName);
+                if (!hasTest) {
+                  reviewComments.push(`🧪 **${filename}**: 해당하는 테스트 파일이 없습니다. \`${testFileName}\` 생성을 고려해보세요.`);
+                  codeQualityScore -= 10;
+                }
+              }
+            }
+            
+            // PR 제목 및 설명 품질 체크
+            if (!pr.title.match(/^\[(feat|fix|docs|style|refactor|test|chore)\]/)) {
+              reviewComments.push(`📝 **PR 제목**: 컨벤션을 따르지 않습니다. \`[타입] 설명\` 형식을 사용해주세요.`);
+              codeQualityScore -= 5;
+            }
+            
+            if (!pr.body || pr.body.length < 50) {
+              reviewComments.push(`📄 **PR 설명**: PR 설명이 너무 짧습니다. 변경사항에 대한 자세한 설명을 추가해주세요.`);
+              codeQualityScore -= 5;
+            }
+            
+            // 브랜치명 체크
+            const branchName = pr.head.ref;
+            if (!branchName.match(/^(feature|fix|hotfix|release)\/[a-z0-9-]+$/)) {
+              reviewComments.push(`🌿 **브랜치명**: \`${branchName}\`이 네이밍 컨벤션을 따르지 않습니다. \`feature/기능명\` 형식을 사용해주세요.`);
+              codeQualityScore -= 3;
+            }
+            
+            // 코드 품질 등급 결정
+            let qualityGrade;
+            if (codeQualityScore >= 90) qualityGrade = "🏆 우수";
+            else if (codeQualityScore >= 80) qualityGrade = "✅ 양호";
+            else if (codeQualityScore >= 70) qualityGrade = "⚠️ 보통";
+            else qualityGrade = "❌ 개선필요";
+            
+            // 자동 리뷰 댓글 생성
+            const reviewComment = `## 🤖 자동 코드 리뷰 결과
+
+            **📊 코드 품질 점수: ${codeQualityScore}/100 (${qualityGrade})**
+
+            ### 📋 리뷰 체크리스트
+            - [${pr.title.match(/^\[(feat|fix|docs|style|refactor|test|chore)\]/) ? 'x' : ' '}] PR 제목 컨벤션 준수
+            - [${pr.body && pr.body.length >= 50 ? 'x' : ' '}] 충분한 PR 설명
+            - [${branchName.match(/^(feature|fix|hotfix|release)\/[a-z0-9-]+$/) ? 'x' : ' '}] 브랜치명 컨벤션 준수
+            - [${pythonFiles.every(f => f.changes <= 300) ? 'x' : ' '}] 적절한 파일 크기
+            - [${files.data.some(f => f.filename.includes('test_')) ? 'x' : ' '}] 테스트 코드 포함
+
+            ### 🔍 발견된 이슈들
+            ${reviewComments.length > 0 ? reviewComments.map(comment => `- ${comment}`).join('\n') : '- ✅ 발견된 이슈가 없습니다!'}
+
+            ### 📈 개선 제안
+            ${codeQualityScore < 90 ? `
+            - 코드 품질 향상을 위해 다음 사항들을 확인해보세요:
+              - 파일 크기를 적절히 유지 (300줄 이하 권장)
+              - 테스트 코드 작성 및 커버리지 확보
+              - 네이밍 컨벤션 준수
+              - 충분한 문서화
+            ` : '- 🎉 코드 품질이 우수합니다!'}
+
+            ### 🛡️ 보안 체크
+            - Python 파일 수: ${pythonFiles.length}개
+            - 변경 통계: +${files.data.reduce((sum, f) => sum + f.additions, 0)} / -${files.data.reduce((sum, f) => sum + f.deletions, 0)}
+
+            ### 📚 참고 자료
+            - [코딩 컨벤션 가이드](https://github.com/your-org/coding-conventions)
+            - [테스트 작성 가이드](https://github.com/your-org/testing-guide)
+            - [보안 체크리스트](https://github.com/your-org/security-checklist)
+
+            ---
+            *이 리뷰는 GitHub Actions에 의해 자동으로 생성되었습니다. 추가적인 수동 리뷰가 필요할 수 있습니다.*`;
+            
+            // 리뷰 댓글 작성
+            await github.rest.issues.createComment({
+              issue_number: pr.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: reviewComment
+            });
+            
+            // 코드 품질이 낮으면 리뷰 요청
+            if (codeQualityScore < 70) {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                event: 'REQUEST_CHANGES',
+                body: `코드 품질 점수가 ${codeQualityScore}점으로 개선이 필요합니다. 위의 자동 리뷰 결과를 참고하여 수정해주세요.`
+              });
+            } else if (codeQualityScore >= 90) {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                event: 'APPROVE',
+                body: `자동 리뷰 결과 코드 품질이 우수합니다! 🎉`
+              });
+            }
+            
+          } catch (error) {
+            console.error('Error in code review:', error);
+            
+            // 오류 발생 시 기본 리뷰 댓글
+            await github.rest.issues.createComment({
+              issue_number: pr.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ⚠️ 자동 코드 리뷰 오류
+              
+              자동 코드 리뷰 중 오류가 발생했습니다. 수동 리뷰를 진행해주세요.
+              
+              **오류 정보:** ${error.message}
+              
+              ---
+              *수동 리뷰어의 검토가 필요합니다.*`
+            });
+          } 

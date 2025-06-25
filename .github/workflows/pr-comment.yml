@@ -1,0 +1,99 @@
+name: PR Comment
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  pr-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Generate PR comment
+      id: pr-info
+      run: |
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        PR_TITLE="${{ github.event.pull_request.title }}"
+        PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+        BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+        BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+        
+        # 파일 변경 통계 생성
+        CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | wc -l)
+        
+        # 댓글 내용 생성
+        COMMENT="## 🎉 새로운 Pull Request가 생성되었습니다!
+
+        **📋 PR 정보:**
+        - **번호:** #$PR_NUMBER
+        - **제목:** $PR_TITLE
+        - **작성자:** @$PR_AUTHOR
+        - **브랜치:** \`$BRANCH_NAME\` → \`$BASE_BRANCH\`
+        - **변경된 파일 수:** $CHANGED_FILES개
+
+        **✅ 리뷰 체크리스트:**
+        - [ ] 코드 품질 및 스타일 확인
+        - [ ] 테스트 코드 작성 여부 확인
+        - [ ] 보안 취약점 검토
+        - [ ] 성능 영향도 검토
+        - [ ] 문서 업데이트 필요성 확인
+
+        **🤖 자동화 상태:**
+        - 테스트 실행: 진행 중...
+        - 코드 커버리지: 분석 중...
+        - 보안 스캔: 예정됨
+
+        ---
+        *이 댓글은 GitHub Actions에 의해 자동으로 생성되었습니다.*"
+        
+        echo "comment<<EOF" >> $GITHUB_OUTPUT
+        echo "$COMMENT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+    
+    - name: Create PR comment
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `${{ steps.pr-info.outputs.comment }}`
+          })
+
+  pr-update-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    if: github.event.action == 'synchronize'
+    
+    steps:
+    - name: Update PR comment on push
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const updateComment = `## 🔄 PR이 업데이트되었습니다!
+
+          **📅 업데이트 시간:** ${new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'})}
+          **🔨 커밋 SHA:** \`${{ github.event.pull_request.head.sha }}\`
+
+          **🔍 새로운 변경사항이 감지되었습니다:**
+          - 자동 테스트가 다시 실행됩니다
+          - 코드 리뷰를 다시 확인해주세요
+          - 새로운 변경사항에 대한 추가 검토가 필요할 수 있습니다
+
+          ---
+          *이 댓글은 GitHub Actions에 의해 자동으로 생성되었습니다.*`;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: updateComment
+          }) 

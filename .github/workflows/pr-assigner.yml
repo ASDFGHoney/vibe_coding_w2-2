@@ -1,0 +1,138 @@
+name: PR Auto Assigner
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+jobs:
+  auto-assign:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Auto assign PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const pr = context.payload.pull_request;
+          const author = pr.user.login;
+          
+          // 팀 멤버 정의 (실제 GitHub 사용자명으로 변경 필요)
+          const teamMembers = [
+            'team-leader',
+            'senior-dev-1', 
+            'senior-dev-2',
+            'backend-dev',
+            'frontend-dev'
+          ];
+          
+          // 코드 소유자 매핑 (파일 경로 기반)
+          const codeOwners = {
+            'backend/': ['backend-dev', 'senior-dev-1'],
+            'frontend/': ['frontend-dev', 'senior-dev-2'],
+            'docs/': ['team-leader'],
+            'tests/': ['backend-dev', 'frontend-dev'],
+            '.github/': ['team-leader', 'senior-dev-1']
+          };
+          
+          let assignees = [];
+          let reviewers = [];
+          
+          try {
+            // PR에서 변경된 파일 목록 가져오기
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number
+            });
+            
+            // 변경된 파일 경로 분석
+            const changedPaths = files.data.map(file => file.filename);
+            const relevantOwners = new Set();
+            
+            // 각 파일 경로에 대해 코드 소유자 찾기
+            changedPaths.forEach(path => {
+              Object.keys(codeOwners).forEach(pattern => {
+                if (path.startsWith(pattern)) {
+                  codeOwners[pattern].forEach(owner => relevantOwners.add(owner));
+                }
+              });
+            });
+            
+            // 작성자를 제외한 관련 소유자들을 리뷰어로 할당
+            reviewers = Array.from(relevantOwners).filter(owner => owner !== author);
+            
+            // 리뷰어가 없으면 기본 팀 리더 할당
+            if (reviewers.length === 0) {
+              reviewers = ['team-leader'];
+            }
+            
+            // 최대 3명의 리뷰어만 할당
+            reviewers = reviewers.slice(0, 3);
+            
+            // PR 작성자를 assignee로 할당
+            assignees = [author];
+            
+          } catch (error) {
+            console.log('Error analyzing files, using default assignment');
+            // 기본값으로 팀 리더를 리뷰어로 할당
+            reviewers = ['team-leader'];
+            assignees = [author];
+          }
+          
+          // Assignees 할당
+          if (assignees.length > 0) {
+            try {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                assignees: assignees
+              });
+              console.log(`Assigned PR to: ${assignees.join(', ')}`);
+            } catch (error) {
+              console.log(`Failed to assign PR: ${error.message}`);
+            }
+          }
+          
+          // Reviewers 할당
+          if (reviewers.length > 0) {
+            try {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                reviewers: reviewers
+              });
+              console.log(`Requested reviews from: ${reviewers.join(', ')}`);
+            } catch (error) {
+              console.log(`Failed to request reviews: ${error.message}`);
+            }
+          }
+          
+          // 할당 결과 댓글 작성
+          const assignmentComment = `## 🔄 자동 할당 완료
+
+          **👥 할당된 담당자:**
+          ${assignees.map(a => `- @${a}`).join('\n')}
+
+          **👨‍💻 요청된 리뷰어:**
+          ${reviewers.map(r => `- @${r}`).join('\n')}
+
+          **📝 할당 기준:**
+          - 변경된 파일 경로를 기반으로 관련 코드 소유자에게 리뷰 요청
+          - PR 작성자를 담당자로 자동 할당
+
+          ---
+          *이 할당은 GitHub Actions에 의해 자동으로 수행되었습니다.*`;
+          
+          await github.rest.issues.createComment({
+            issue_number: pr.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: assignmentComment
+          }); 

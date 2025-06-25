@@ -1,0 +1,200 @@
+name: Issue Auto Assigner
+
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  auto-assign-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    
+    steps:
+    - name: Auto assign issue
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+          const labels = issue.labels.map(label => label.name);
+          
+          // 팀 멤버 정의 (실제 GitHub 사용자명으로 변경 필요)
+          const teamMembers = {
+            'team-leader': ['management', 'strategy', 'general'],
+            'backend-lead': ['backend', 'api', 'database', 'server'],
+            'frontend-lead': ['frontend', 'ui', 'ux', 'design'],
+            'devops-lead': ['deployment', 'ci/cd', 'infrastructure', 'docker'],
+            'qa-lead': ['testing', 'quality', 'bug', 'validation'],
+            'security-lead': ['security', 'auth', 'permission', 'vulnerability']
+          };
+          
+          // 이슈 타입별 기본 담당자
+          const typeAssignments = {
+            'bug': 'qa-lead',
+            'feature': 'team-leader',
+            'enhancement': 'team-leader',
+            'question': 'team-leader',
+            'documentation': 'team-leader',
+            'security': 'security-lead',
+            'performance': 'backend-lead'
+          };
+          
+          let assignees = [];
+          
+          try {
+            // 1. 라벨 기반 할당
+            for (const label of labels) {
+              if (typeAssignments[label]) {
+                assignees.push(typeAssignments[label]);
+              }
+            }
+            
+            // 2. 제목/내용 키워드 기반 할당
+            const allText = title + ' ' + body;
+            
+            for (const [member, keywords] of Object.entries(teamMembers)) {
+              for (const keyword of keywords) {
+                if (allText.includes(keyword)) {
+                  assignees.push(member);
+                  break;
+                }
+              }
+            }
+            
+            // 3. 이슈 제목 패턴 기반 할당
+            if (title.includes('[backend]') || title.includes('api') || title.includes('server')) {
+              assignees.push('backend-lead');
+            }
+            if (title.includes('[frontend]') || title.includes('ui') || title.includes('client')) {
+              assignees.push('frontend-lead');
+            }
+            if (title.includes('[devops]') || title.includes('deploy') || title.includes('infrastructure')) {
+              assignees.push('devops-lead');
+            }
+            if (title.includes('[security]') || title.includes('auth') || title.includes('permission')) {
+              assignees.push('security-lead');
+            }
+            
+            // 4. 긴급도 기반 추가 할당
+            if (labels.includes('urgent') || labels.includes('critical') || title.includes('urgent')) {
+              assignees.push('team-leader');
+            }
+            
+            // 중복 제거 및 기본값 설정
+            assignees = [...new Set(assignees)];
+            
+            // 아무도 할당되지 않은 경우 기본 할당
+            if (assignees.length === 0) {
+              assignees = ['team-leader'];
+            }
+            
+            // 최대 2명까지만 할당 (너무 많은 할당 방지)
+            assignees = assignees.slice(0, 2);
+            
+            // 할당 실행
+            if (assignees.length > 0) {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                assignees: assignees
+              });
+              
+              console.log(`Assigned issue to: ${assignees.join(', ')}`);
+              
+              // 할당 결과 댓글 작성
+              const assignmentReason = [];
+              
+              // 할당 이유 분석
+              if (labels.some(label => typeAssignments[label])) {
+                assignmentReason.push('라벨 기반 자동 할당');
+              }
+              if (assignees.includes('team-leader') && (labels.includes('urgent') || title.includes('urgent'))) {
+                assignmentReason.push('긴급 이슈로 팀 리더 할당');
+              }
+              
+              const keywords = [];
+              for (const [member, memberKeywords] of Object.entries(teamMembers)) {
+                if (assignees.includes(member)) {
+                  const foundKeywords = memberKeywords.filter(keyword => 
+                    (title + ' ' + body).includes(keyword)
+                  );
+                  if (foundKeywords.length > 0) {
+                    keywords.push(`${member}: ${foundKeywords.join(', ')}`);
+                  }
+                }
+              }
+              
+              if (keywords.length > 0) {
+                assignmentReason.push('키워드 매칭');
+              }
+              
+              const assignmentComment = `## 👥 자동 할당 완료
+
+              **할당된 담당자:**
+              ${assignees.map(assignee => `- @${assignee}`).join('\n')}
+
+              **할당 기준:**
+              ${assignmentReason.length > 0 ? assignmentReason.map(reason => `- ${reason}`).join('\n') : '- 기본 할당 규칙 적용'}
+
+              ${keywords.length > 0 ? `\n**매칭된 키워드:**\n${keywords.map(kw => `- ${kw}`).join('\n')}` : ''}
+
+              **📝 담당자별 역할:**
+              - **team-leader**: 전체 이슈 관리 및 우선순위 결정
+              - **backend-lead**: 백엔드 관련 기술 이슈
+              - **frontend-lead**: 프론트엔드 관련 기술 이슈
+              - **devops-lead**: 인프라 및 배포 관련 이슈
+              - **qa-lead**: 품질 관리 및 테스트 관련 이슈
+              - **security-lead**: 보안 관련 이슈
+
+              **⏰ 다음 단계:**
+              1. 담당자가 이슈 내용을 검토합니다
+              2. 필요시 추가 정보를 요청할 수 있습니다
+              3. 작업 일정을 수립하고 알려드립니다
+
+              ---
+              *이 할당은 GitHub Actions에 의해 자동으로 수행되었습니다.*`;
+              
+              await github.rest.issues.createComment({
+                issue_number: issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: assignmentComment
+              });
+            }
+            
+          } catch (error) {
+            console.error('Error in auto-assignment:', error);
+            
+            // 오류 발생 시 기본 할당
+            try {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                assignees: ['team-leader']
+              });
+              
+              await github.rest.issues.createComment({
+                issue_number: issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## ⚠️ 자동 할당 오류
+
+                자동 할당 중 오류가 발생하여 팀 리더에게 기본 할당되었습니다.
+
+                **오류 정보:** ${error.message}
+
+                팀 리더가 적절한 담당자를 재할당할 예정입니다.
+
+                ---
+                *오류 발생으로 인한 기본 할당입니다.*`
+              });
+              
+            } catch (fallbackError) {
+              console.error('Fallback assignment also failed:', fallbackError);
+            }
+          } 
